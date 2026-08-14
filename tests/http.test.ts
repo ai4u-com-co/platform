@@ -66,4 +66,48 @@ describe("withApiHandler", () => {
     expect(res.headers.get("x-request-id")).toBe("r2")
     expect(await res.text()).toBe("raw")
   })
+
+  describe("clasificación de log según status de una Response explícita (no lanzada)", () => {
+    function spyLogger() {
+      const spies = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }
+      const getLoggerSpy = vi.spyOn(logger, "getLogger").mockReturnValue(spies as unknown as logger.Logger)
+      return { spies, getLoggerSpy }
+    }
+
+    // Regresión: un handler que hace `return NextResponse.json({...}, {status: 500})`
+    // nunca lanza excepción, así que antes del fix quedaba logueado como INFO y era
+    // invisible para paneles/automatizaciones que filtran por level=ERROR.
+    it("Response con status 500 (sin throw) → log.error, nunca log.info", async () => {
+      const { spies, getLoggerSpy } = spyLogger()
+      const route = withApiHandler(async () => new Response(null, { status: 500 }))
+      await route(new Request("https://x/api/test"))
+      expect(spies.error).toHaveBeenCalledTimes(1)
+      expect(spies.error.mock.calls[0][0]).toMatchObject({ status: 500 })
+      expect(spies.info).not.toHaveBeenCalled()
+      expect(spies.warn).not.toHaveBeenCalled()
+      getLoggerSpy.mockRestore()
+    })
+
+    it("Response con status 404 (sin throw) → log.warn, nunca log.info ni log.error", async () => {
+      const { spies, getLoggerSpy } = spyLogger()
+      const route = withApiHandler(async () => new Response(null, { status: 404 }))
+      await route(new Request("https://x/api/test"))
+      expect(spies.warn).toHaveBeenCalledTimes(1)
+      expect(spies.warn.mock.calls[0][0]).toMatchObject({ status: 404 })
+      expect(spies.info).not.toHaveBeenCalled()
+      expect(spies.error).not.toHaveBeenCalled()
+      getLoggerSpy.mockRestore()
+    })
+
+    it("Response con status 200 (sin throw) → log.info, sin regresión del caso feliz", async () => {
+      const { spies, getLoggerSpy } = spyLogger()
+      const route = withApiHandler(async () => new Response(null, { status: 200 }))
+      await route(new Request("https://x/api/test"))
+      expect(spies.info).toHaveBeenCalledTimes(1)
+      expect(spies.info.mock.calls[0][0]).toMatchObject({ status: 200 })
+      expect(spies.warn).not.toHaveBeenCalled()
+      expect(spies.error).not.toHaveBeenCalled()
+      getLoggerSpy.mockRestore()
+    })
+  })
 })

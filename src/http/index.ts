@@ -136,7 +136,18 @@ export function withApiHandler<R extends object = object>(
 
           const durationMs = Date.now() - start
           if (result instanceof Response) {
-            log.info({ durationMs, status: result.status }, label)
+            // Clasifica por status: un handler puede devolver `NextResponse.json({...},
+            // {status: 500})` sin lanzar excepción, y ese caso debe quedar visible como
+            // ERROR/WARN en platform_logs (no como INFO) para paneles/automatizaciones
+            // que filtran por level.
+            const logPayload = { durationMs, status: result.status }
+            if (result.status >= 500) {
+              log.error(logPayload, label)
+            } else if (result.status >= 400) {
+              log.warn(logPayload, label)
+            } else {
+              log.info(logPayload, label)
+            }
             // Propaga el requestId aunque el handler haya construido su propia Response.
             if (!result.headers.get("x-request-id")) result.headers.set("x-request-id", requestId)
             return result
