@@ -64,6 +64,13 @@ describe("logger central", () => {
     const out = lines.join("")
     expect(out).toContain("explotó")
   })
+
+  it("no permite que `extra` pise el `service` real (regresión: handoff SSO logueaba service=mod.id)", () => {
+    const lines = captureStdout(() => log.info({ service: "otra-cosa" }, "handoff SSO"))
+    const record = JSON.parse(lines.join(""))
+    expect(record.service).toBe("test-service")
+    expect(record.service).not.toBe("otra-cosa")
+  })
 })
 
 describe("service name entre copias del módulo (regresión: bug de 'unknown')", () => {

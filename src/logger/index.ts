@@ -194,13 +194,24 @@ function emit(level: Level, component: string, fieldsOrMsg: Record<string, unkno
   const errField = extra.err
   if (errField) delete extra.err
 
+  // Claves reservadas del propio record: el caller nunca puede pisarlas vía
+  // `extra` (primer argumento de log.info/warn/error/debug). Bug real: un
+  // caller pasando `{ service: mod.id }` como campo de negocio silenciaba el
+  // nombre real del servicio en cada log (mission-control/app/api/handoff).
+  const safeExtra = sanitize(extra)
+  delete safeExtra.ts
+  delete safeExtra.level
+  delete safeExtra.service
+  delete safeExtra.component
+  delete safeExtra.msg
+
   const record: Record<string, unknown> = {
     ts: new Date().toISOString(),
     level,
     service: resolveServiceName(),
     component,
     ...ctx,
-    ...sanitize(extra),
+    ...safeExtra,
     msg: message,
   }
   if (errField !== undefined) record.err = serializeErr(errField)

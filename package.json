@@ -1,6 +1,6 @@
 {
   "name": "@ai4u/platform",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Preocupaciones transversales para el ecosistema superAI: logging, errores tipados y auth (identidad + permisos)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
