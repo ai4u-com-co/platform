@@ -44,7 +44,7 @@ export interface ServiceAuthResult {
     /** tenant resuelto cuando la auth fue por X-API-Key por tenant. */
     tenantId?: string;
 }
-/** Valida auth de servicio (x-mc-secret o X-API-Key). Comparación de longitud constante simple. */
+/** Valida auth de servicio (x-mc-secret o X-API-Key). Compara con `safeEqual` (SHA-256 + timingSafeEqual). */
 export declare function verifyServiceRequest(req: HeaderCarrier, cfg?: ServiceAuthConfig): ServiceAuthResult;
 export {};
 //# sourceMappingURL=index.d.ts.map

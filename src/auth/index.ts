@@ -14,6 +14,7 @@
  */
 import { verifySession } from "@ai4u/mc-sso"
 import { ForbiddenError, UnauthorizedError } from "../errors"
+import { safeEqual } from "../security"
 
 export interface Identity {
   tenantId: string
@@ -128,7 +129,7 @@ export interface ServiceAuthResult {
   tenantId?: string
 }
 
-/** Valida auth de servicio (x-mc-secret o X-API-Key). Comparación de longitud constante simple. */
+/** Valida auth de servicio (x-mc-secret o X-API-Key). Compara con `safeEqual` (SHA-256 + timingSafeEqual). */
 export function verifyServiceRequest(req: HeaderCarrier, cfg: ServiceAuthConfig = {}): ServiceAuthResult {
   const sharedSecret = cfg.sharedSecret ?? process.env.MISSION_CONTROL_SECRET
   const candidates = [sharedSecret, ...(cfg.sharedSecrets ?? [])].filter(
@@ -144,12 +145,4 @@ export function verifyServiceRequest(req: HeaderCarrier, cfg: ServiceAuthConfig 
     }
   }
   return { ok: false }
-}
-
-/** Comparación en tiempo (aprox.) constante sin node:crypto, segura para Edge Runtime. */
-function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false
-  let diff = 0
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
-  return diff === 0
 }

@@ -36,7 +36,29 @@ export const POST = withApiHandler(async (req, ctx) => {
 
 // Auth: identidad + permisos uniformes
 import { readIdentity, requireModule, verifyServiceRequest } from "@ai4u/platform/auth"
+
+// Comparación de secretos en tiempo constante
+import { safeEqual } from "@ai4u/platform/security"
 ```
+
+## Comparar secretos (v0.5.0)
+
+Nunca compares un secreto con `===` (sale en el primer carácter distinto y filtra por tiempo).
+
+```ts
+// Node (route handlers, backends, crons)
+import { safeEqual } from "@ai4u/platform/security"
+if (!safeEqual(req.headers.get("authorization"), `Bearer ${process.env.CRON_SECRET}`)) return new Response(null, { status: 401 })
+
+// middleware / proxy / Edge Runtime (Web Crypto, sin node:*)
+import { safeEqualEdge } from "@ai4u/platform/security/edge"
+if (!(await safeEqualEdge(req.headers.get("x-mc-secret"), process.env.MISSION_CONTROL_SECRET))) { /* 401 */ }
+```
+
+- `safeEqual(a, b): boolean` — SHA-256 de ambos + `crypto.timingSafeEqual`; tolera largos distintos sin filtrarlos.
+- `safeEqualEdge(a, b): Promise<boolean>` — mismo contrato con `crypto.subtle`, sin salida temprana.
+- En ambos, `undefined`, `null` y `""` devuelven `false`: un secreto vacío o no configurado nunca autentica.
+- `verifyServiceRequest` (`@ai4u/platform/auth`) ya usa `safeEqual` internamente.
 
 ## Observabilidad (envío a Supabase vía el panel admin)
 

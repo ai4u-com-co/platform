@@ -1,6 +1,6 @@
 {
   "name": "@ai4u/platform",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Preocupaciones transversales para el ecosistema superAI: logging, errores tipados y auth (identidad + permisos)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -24,6 +24,14 @@
     "./auth": {
       "types": "./dist/auth/index.d.ts",
       "default": "./dist/auth/index.js"
+    },
+    "./security": {
+      "types": "./dist/security/index.d.ts",
+      "default": "./dist/security/index.js"
+    },
+    "./security/edge": {
+      "types": "./dist/security/edge.d.ts",
+      "default": "./dist/security/edge.js"
     }
   },
   "files": [

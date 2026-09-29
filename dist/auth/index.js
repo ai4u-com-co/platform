@@ -23,6 +23,7 @@ exports.verifyServiceRequest = verifyServiceRequest;
  */
 const mc_sso_1 = require("@ai4u/mc-sso");
 const errors_1 = require("../errors");
+const security_1 = require("../security");
 function parseCookies(header) {
     const out = {};
     if (!header)
@@ -89,28 +90,19 @@ function requireRole(identity, role) {
     }
     return identity;
 }
-/** Valida auth de servicio (x-mc-secret o X-API-Key). Comparación de longitud constante simple. */
+/** Valida auth de servicio (x-mc-secret o X-API-Key). Compara con `safeEqual` (SHA-256 + timingSafeEqual). */
 function verifyServiceRequest(req, cfg = {}) {
     const sharedSecret = cfg.sharedSecret ?? process.env.MISSION_CONTROL_SECRET;
     const candidates = [sharedSecret, ...(cfg.sharedSecrets ?? [])].filter((s) => typeof s === "string" && s.length > 0);
     const mcSecret = req.headers.get("x-mc-secret");
-    if (mcSecret && candidates.some((candidate) => safeEqual(mcSecret, candidate)))
+    if (mcSecret && candidates.some((candidate) => (0, security_1.safeEqual)(mcSecret, candidate)))
         return { ok: true };
     const apiKey = req.headers.get("x-api-key");
     if (apiKey && cfg.apiKeys) {
         for (const [tenantId, key] of Object.entries(cfg.apiKeys)) {
-            if (key && safeEqual(apiKey, key))
+            if (key && (0, security_1.safeEqual)(apiKey, key))
                 return { ok: true, tenantId };
         }
     }
     return { ok: false };
-}
-/** Comparación en tiempo (aprox.) constante sin node:crypto, segura para Edge Runtime. */
-function safeEqual(a, b) {
-    if (a.length !== b.length)
-        return false;
-    let diff = 0;
-    for (let i = 0; i < a.length; i++)
-        diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-    return diff === 0;
 }

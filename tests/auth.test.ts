@@ -35,3 +35,17 @@ describe("verifyServiceRequest", () => {
     expect(result.ok).toBe(false)
   })
 })
+
+describe("verifyServiceRequest usa safeEqual", () => {
+  it("rechaza secretos de distinto largo y prefijos", () => {
+    expect(verifyServiceRequest(reqWith({ "x-mc-secret": "s3cr" }), { sharedSecret: "s3cr3t" }).ok).toBe(false)
+    expect(verifyServiceRequest(reqWith({ "x-mc-secret": "s3cr3t-extra" }), { sharedSecret: "s3cr3t" }).ok).toBe(false)
+    expect(verifyServiceRequest(reqWith({ "x-api-key": "key-tam" }), { apiKeys: { tamaprint: "key-tama" } }).ok).toBe(
+      false,
+    )
+  })
+
+  it("un apiKey vacío en la config nunca autentica", () => {
+    expect(verifyServiceRequest(reqWith({ "x-api-key": "" }), { apiKeys: { tamaprint: "" } }).ok).toBe(false)
+  })
+})
