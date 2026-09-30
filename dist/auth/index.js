@@ -24,6 +24,15 @@ exports.verifyServiceRequest = verifyServiceRequest;
 const mc_sso_1 = require("@ai4u/mc-sso");
 const errors_1 = require("../errors");
 const security_1 = require("../security");
+/**
+ * Parsea el header Cookie. Nunca lanza: una cookie con percent-encoding inválido
+ * (p.ej. `%E0%A4%A`, que hace lanzar URIError a decodeURIComponent) se IGNORA y se
+ * siguen leyendo las demás — mismo criterio que el parser de cookies de Next
+ * (@edge-runtime/cookies). Se ignora en vez de usar el valor crudo para que un
+ * duplicado basura (`mc_session=<válido>; mc_session=%E0`) no pise al valor válido
+ * y para no entregar nunca un valor que no es el que el servidor escribió.
+ * Antes, una sola cookie así hacía lanzar a readIdentity → 500 en withApiHandler.
+ */
 function parseCookies(header) {
     const out = {};
     if (!header)
@@ -32,7 +41,12 @@ function parseCookies(header) {
         const i = part.indexOf("=");
         if (i === -1)
             continue;
-        out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+        try {
+            out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+        }
+        catch {
+            // Cookie mal codificada: se ignora (ver doc arriba).
+        }
     }
     return out;
 }

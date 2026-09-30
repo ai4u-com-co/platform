@@ -1,5 +1,23 @@
 # Changelog — @ai4u/platform
 
+## 0.6.2 — 2026-09-30
+
+### Corregido
+- `@ai4u/platform/auth`: `parseCookies` (usado por `readIdentity`) llamaba a
+  `decodeURIComponent` sin guardia. Una sola cookie con percent-encoding inválido
+  (p.ej. `%E0%A4%A`) en el header `Cookie` hacía lanzar `URIError: URI malformed` a
+  `readIdentity`, y `withApiHandler` respondía **500** en toda ruta envuelta, con o sin
+  `requireModule`/`requireRole` (siempre que hubiera secreto de sesión configurado).
+- Ahora una cookie mal codificada se **ignora** y las demás se siguen leyendo (mismo
+  criterio que el parser de cookies de Next, `@edge-runtime/cookies`). No se usa el valor
+  crudo: así un duplicado basura (`mc_session=<válido>; mc_session=%E0`) no pisa al
+  válido. Una `mc_session` mal codificada da identidad `null` (401 donde se exige
+  sesión), nunca 500.
+
+### Sin cambios
+- API pública y comportamiento con cookies bien codificadas (incluido percent-encoding
+  válido y valores con `=`).
+
 ## 0.6.1 — 2026-09-30
 
 ### Cambiado
