@@ -60,6 +60,29 @@ if (!(await safeEqualEdge(req.headers.get("x-mc-secret"), process.env.MISSION_CO
 - En ambos, `undefined`, `null` y `""` devuelven `false`: un secreto vacío o no configurado nunca autentica.
 - `verifyServiceRequest` (`@ai4u/platform/auth`) ya usa `safeEqual` internamente.
 
+## Identidad hacia el gateway SAP (v0.6.0)
+
+Toda llamada a `sap-b1-backend` debe adjuntar el token OIDC de Vercel del deployment
+(audiencia `https://sap-b1-backend.ai4u`) en el header `x-ai4u-identity`. Dos líneas:
+
+```ts
+import { getGatewayIdentityHeaders } from "@ai4u/platform/gateway-identity"
+const res = await fetch(url, { headers: { "x-mc-secret": secret, ...(await getGatewayIdentityHeaders()) } })
+```
+
+- `getGatewayIdentityHeaders(opts?): Promise<Record<string, string>>` devuelve
+  `{ "x-ai4u-identity": <token> }` o `{}`. **Nunca lanza** (fail-open): sin token (local,
+  error del intercambio, timeout de `opts.timeoutMs`, default 1500 ms) la llamada sale igual
+  que antes. La auth real (`x-mc-secret` / `X-API-Key`) no cambia.
+- El token se pide **en cada llamada** (llamala dentro del request, nunca a nivel de módulo);
+  el único caché es el interno de `@vercel/oidc`. El token nunca se loguea: en Vercel emite
+  como mucho 1 `warn`/min por instancia si falta; fuera de Vercel solo `debug`.
+- Opciones: `timeoutMs`, `getToken` (reemplaza a `getVercelOidcToken`, útil en tests) y
+  `logger` (`{ warn, debug }`, default `getLogger("gateway-identity")`).
+- Constantes: `GATEWAY_IDENTITY_HEADER`, `GATEWAY_OIDC_AUDIENCE`, `GATEWAY_IDENTITY_TIMEOUT_MS`.
+- Solo servidor (Node). Vive **solo** en este subpath: importar `@ai4u/platform` (raíz) no
+  carga `@vercel/oidc`.
+
 ## Observabilidad (envío a Supabase vía el panel admin)
 
 Cada app arranca el transporte una vez en `instrumentation.ts`:

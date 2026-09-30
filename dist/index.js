@@ -24,8 +24,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
  *   import { readIdentity, requireModule } from "@ai4u/platform/auth"
  *   import { safeEqual } from "@ai4u/platform/security"
  *   import { safeEqualEdge } from "@ai4u/platform/security/edge"   (middleware/Edge)
+ *   import { getGatewayIdentityHeaders } from "@ai4u/platform/gateway-identity"   (solo servidor)
  *
- * Este barrel re-exporta todo para quien prefiera un único import.
+ * Este barrel re-exporta todo para quien prefiera un único import, SALVO
+ * gateway-identity: vive solo en su subpath para que las apps que no hablan con
+ * sap-b1-backend no carguen @vercel/oidc.
  */
 __exportStar(require("./logger"), exports);
 __exportStar(require("./errors"), exports);

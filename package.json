@@ -1,6 +1,6 @@
 {
   "name": "@ai4u/platform",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Preocupaciones transversales para el ecosistema superAI: logging, errores tipados y auth (identidad + permisos)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -32,6 +32,10 @@
     "./security/edge": {
       "types": "./dist/security/edge.d.ts",
       "default": "./dist/security/edge.js"
+    },
+    "./gateway-identity": {
+      "types": "./dist/gateway-identity/index.d.ts",
+      "default": "./dist/gateway-identity/index.js"
     }
   },
   "files": [
@@ -44,7 +48,8 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "@ai4u/mc-sso": "github:ai4u-com-co/mc-sso#v1.1.0"
+    "@ai4u/mc-sso": "github:ai4u-com-co/mc-sso#v1.1.0",
+    "@vercel/oidc": "^3.8.9"
   },
   "devDependencies": {
     "@types/node": "^20",
