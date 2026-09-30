@@ -1,5 +1,19 @@
 # Changelog — @ai4u/platform
 
+## 0.6.1 — 2026-09-30
+
+### Cambiado
+- Dependencia `@ai4u/mc-sso` de `github:ai4u-com-co/mc-sso#v1.1.0` a `#v1.2.0`, la
+  misma que ya usan las apps. Es aditiva (1.2.0 suma `createMcAuthHandler`,
+  `readMcSession`, `mcSessionGuard` y `MC_SESSION_COOKIE`; `verifySession`, lo único
+  que usa `@ai4u/platform/auth`, no cambia). Evita que una app termine con dos copias
+  de mc-sso (la suya 1.2.0 y la anidada 1.1.0 de platform).
+- Reemplaza al PR #10 de bump-bot en el espejo `ai4u-com-co/platform` (la fuente de
+  verdad es el monorepo kernel; el espejo se sobrescribe al publicar el tag).
+
+### Sin cambios
+- API y comportamiento de todos los subpaths.
+
 ## 0.6.0 — 2026-09-30
 
 ### Agregado
