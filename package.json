@@ -44,7 +44,7 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "@ai4u/mc-sso": "github:ai4u-com-co/mc-sso#v1.1.0"
+    "@ai4u/mc-sso": "github:ai4u-com-co/mc-sso#v1.2.0"
   },
   "devDependencies": {
     "@types/node": "^20",
