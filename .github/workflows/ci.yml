@@ -5,9 +5,16 @@ on:
     branches: [main, master]
   pull_request:
 
+concurrency:
+  # Un push nuevo a un PR cancela la corrida anterior (ahorra minutos de Actions).
+  # En push a la rama default NO se cancela: cada merge conserva su CI.
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
