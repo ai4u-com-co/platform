@@ -1,5 +1,38 @@
 # Changelog — @ai4u/platform
 
+## 0.7.0 — 2026-10-28
+
+### Añadido
+- `@ai4u/platform/instrumentation`: `onRequestError(err, request, context)` para
+  `export { onRequestError } from ...` en `instrumentation.ts`. Registra errores de render,
+  rutas, acciones y proxy de Next (ERROR + flush) sin headers/cookies/cuerpo/querystring.
+  No-op en Edge.
+- `@ai4u/platform/client`: `installClientErrorReporter` y `reportClientError` (errores del
+  navegador: dedupe 60 s, 5 por sesión, sendBeacon/fetch keepalive, solo pathname).
+- `@ai4u/platform/client-errors`: `createClientErrorHandler` (POST sin auth: JSON, tope de
+  tamaño, mismo origen, límite por IP en memoria, saneado; responde 204).
+- `@ai4u/platform/jobs`: `runJob(name, fn, { log?, rethrow?, tenant? })` para crons.
+
+### Corregido
+- `@ai4u/platform/logger`: `serializeErr` enmascara claves y tokens en `message` y `stack`
+  (query `?key=`/`token=`/`signature=`…, `Bearer`/`Basic`, JWT, claves `sk-…`/`AIza…`/`ghp_…`/
+  `sb_secret_…`, credenciales `user:clave@` en URL). Nueva función pura `redactSecrets(text)`.
+  Los correos se enmascaran a `[correo]@dominio` (si el dominio no es ASCII normal, solo
+  `[correo]`); es PII, no un secreto (errores de SMTP traen el destinatario) y es fail-closed
+  (Unicode, locales largos, localhost/IP, `@` encadenados como `@a@b.com`; falsos positivos aceptados:
+  `pkg@1.2.3`, `git@github.com`). Las rutas npm con scope (`/node_modules/@scope/pkg`) no se tocan;
+  un correo pegado a una ruta (`https://host/ana@x.com`) sí se enmascara. Lo que precede al
+  correo solo se conserva si la racha parece claramente una ruta (`/`, `./`, `../`, `~/`,
+  `esquema://` o `node_modules/`); en otro caso (`a/b@x.com`) toda la racha es parte local.
+  La query entera de las URLs `http(s)://…?…` se enmascara (`?[redacted]`, el path se conserva) y
+  los parámetros `nombre=valor` cuyo nombre TERMINA en token/key/secret/signature/sig/password/
+  passwd/pass/auth/credential/session se enmascaran también fuera de URLs. Los tokens se enmascaran completos (sin límite de longitud por token). Se redacta primero
+  y luego se recorta: `message` a 16 384 caracteres y `stack` a 32 768 (`…[truncado]`);
+  entrada acotada y regex ancladas con lookbehind mantienen el coste lineal.
+
+### Sin cambios
+- `withApiHandler`, `getLogger`, `configureTransport` y el resto de la API existente.
+
 ## 0.6.2 — 2026-09-30
 
 ### Corregido

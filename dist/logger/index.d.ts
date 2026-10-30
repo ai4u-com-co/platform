@@ -12,6 +12,8 @@ export declare function runWithContext<T>(ctx: RunContext, fn: () => T): T;
 export declare function setContextFields(fields: RunContext): void;
 export declare function getContext(): RunContext;
 export declare function setServiceName(name: string): void;
+/** Enmascara claves, tokens y parámetros sensibles dentro de un texto. Pura, idempotente, nunca lanza. */
+export declare function redactSecrets(text: string): string;
 export interface TransportConfig {
     /** URL del ingest API del panel admin, p.ej. https://admin.ai4u.com/api/ingest/logs */
     endpoint: string;
