@@ -42,7 +42,16 @@ export const POST = withApiHandler(async (req, ctx) => {
 }, { label: "POST cosa", requireModule: "kpis" })
 
 // Auth: identidad + permisos uniformes
-import { readIdentity, requireModule, verifyServiceRequest } from "@ai4u/platform/auth"
+import { readIdentity, requireModule, verifyServiceRequest, configureIdentity } from "@ai4u/platform/auth"
+// Endurecimiento opt-in (0.8.0): ata la cookie a ESTA app/tenant (el secreto se comparte entre apps)
+configureIdentity({ serviceId: "mi-app", allowedTenants: ["mi-tenant"] })   // serviceId = el de tu createMcAuthHandler
+// requireModule(identity, "kpis", { strict: true })  → sin allowedModules (null/[]) NO pasa
+// Ver CHANGELOG 0.8.0 "Cómo adoptar el endurecimiento de auth". Decisión pendiente: por defecto
+// allowedModules null/[] = acceso a todo (compatibilidad con access.ts de Mission Control).
+
+// Contrato de errores (0.8.0): un 500 no operacional responde { error: "Error interno", code, requestId };
+// el mensaje real va solo al log. 4xx y AppError operacionales conservan su mensaje.
+// Un 4xx lanzado se loguea como warn; solo los 5xx como error.
 
 // Comparación de secretos en tiempo constante
 import { safeEqual } from "@ai4u/platform/security"
@@ -106,7 +115,8 @@ if (process.env.PLATFORM_INGEST_URL && process.env.INGEST_SECRET) {
 ```
 
 El transporte es **fire-and-forget en lote**: nunca bloquea ni rompe la app; si el ingest
-cae, los logs siguen en stdout. En jobs serverless (cron) llamá `await flushLogs()` al final.
+cae, los logs siguen en stdout (0.8.0: el POST tiene timeout de 2 s, el lote fallido se reencola con tope
+de 1000 (un timeout con ingest que sí insertó puede duplicar; circuit breaker tras 3 fallos) y cada línea lleva `platformVersion`). En jobs serverless (cron) llamá `await flushLogs()` al final.
 
 ## Errores que no pasan por `withApiHandler` (v0.7.0)
 

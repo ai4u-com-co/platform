@@ -58,10 +58,15 @@ function jsonResponse(body, status, requestId) {
         headers: { "content-type": "application/json", "x-request-id": requestId },
     });
 }
+/** x-request-id entrante: solo charset/longitud acotados; si no, se regenera (evita inflado e inyección en logs). */
+const REQUEST_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
+function safeIncomingRequestId(v) {
+    return v !== null && REQUEST_ID_RE.test(v) ? v : null;
+}
 function withApiHandler(handler, options = {}) {
     const label = options.label ?? "api";
     return async (req, routeCtx) => {
-        const requestId = req.headers.get("x-request-id") ?? (0, logger_1.newRequestId)();
+        const requestId = safeIncomingRequestId(req.headers.get("x-request-id")) ?? (0, logger_1.newRequestId)();
         const log = (0, logger_1.getLogger)(label);
         return (0, logger_1.runWithContext)({ requestId }, async () => {
             const start = Date.now();
@@ -83,7 +88,7 @@ function withApiHandler(handler, options = {}) {
                         if (identity)
                             (0, logger_1.setContextFields)({ tenant: identity.tenantId, userId: identity.userId });
                         if (options.requireModule)
-                            (0, auth_1.requireModule)(identity, options.requireModule);
+                            (0, auth_1.requireModule)(identity, options.requireModule, { strict: options.strictModules });
                         if (options.requireRole)
                             (0, auth_1.requireRole)(identity, options.requireRole);
                     }
@@ -123,8 +128,16 @@ function withApiHandler(handler, options = {}) {
                 catch (err) {
                     const durationMs = Date.now() - start;
                     const appErr = (0, errors_1.classifyUnknownError)(err);
-                    // Log con detalle completo (stack incluido); la respuesta al cliente es segura.
-                    log.error({ durationMs, status: appErr.httpStatus, code: appErr.code, err: appErr.cause ?? appErr }, `${label} error`);
+                    // 4xx lanzado y operacional (Unauthorized/NotFound/Validation…) es tráfico normal: WARN sin stack,
+                    // igual que un 4xx retornado como Response. Va a ERROR el 5xx y todo AppError marcado
+                    // isOperational:false (bug inesperado, ver errors/index.ts): lo que consumen paneles y el fixer.
+                    if (appErr.httpStatus < 500 && appErr.isOperational) {
+                        log.warn({ durationMs, status: appErr.httpStatus, code: appErr.code }, `${label} ${appErr.name}: ${appErr.message}`);
+                    }
+                    else {
+                        // Log con detalle completo (stack incluido); la respuesta al cliente es segura.
+                        log.error({ durationMs, status: appErr.httpStatus, code: appErr.code, err: appErr.cause ?? appErr }, `${label} error`);
+                    }
                     const { status, body } = (0, errors_1.toErrorResponse)(appErr, requestId);
                     return jsonResponse(body, status, requestId);
                 }

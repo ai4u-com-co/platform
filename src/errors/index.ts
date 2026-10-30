@@ -129,6 +129,9 @@ export function isAppError(err: unknown): err is AppError {
 /**
  * Convierte cualquier `unknown` en un AppError. Lo que no reconozca se trata como
  * fallo de infraestructura inesperado (500), nunca se ignora.
+ *
+ * El `message` del AppError devuelto conserva el texto original SOLO para logging; lo que se
+ * envía al cliente lo decide `toErrorResponse` (que lo reemplaza por "Error interno").
  */
 export function classifyUnknownError(err: unknown): AppError {
   if (isAppError(err)) return err
@@ -149,20 +152,31 @@ export interface ErrorResponseBody {
   details?: unknown
 }
 
-/** Cuerpo JSON uniforme y seguro para responder al cliente. */
+/** Mensaje genérico que ve el cliente cuando el error no es operacional y es 5xx. */
+export const GENERIC_ERROR_MESSAGE = "Error interno"
+
+/**
+ * Cuerpo JSON uniforme y seguro para responder al cliente.
+ *
+ * Desde 0.8.0: un error NO operacional con status >= 500 (excepciones desconocidas, fallos de
+ * infraestructura) responde `error: "Error interno"` en vez de su mensaje: ese texto suele traer
+ * internals (hosts, SQL, URLs con claves). El mensaje real queda en el log (redactado) y el
+ * cliente correlaciona por `requestId`; tampoco se envía `details`. Los operacionales y los 4xx conservan mensaje y details.
+ */
 export function toErrorResponse(
   err: unknown,
   requestId?: string,
 ): { status: number; body: ErrorResponseBody } {
   const appErr = classifyUnknownError(err)
+  const masked = !appErr.isOperational && appErr.httpStatus >= 500
   return {
     status: appErr.httpStatus,
     body: {
-      error: appErr.message,
+      error: masked ? GENERIC_ERROR_MESSAGE : appErr.message,
       code: appErr.code,
       category: appErr.category,
       ...(requestId ? { requestId } : {}),
-      ...(appErr.details !== undefined ? { details: appErr.details } : {}),
+      ...(!masked && appErr.details !== undefined ? { details: appErr.details } : {}),
     },
   }
 }

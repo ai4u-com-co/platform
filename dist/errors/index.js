@@ -11,7 +11,7 @@
  * responda errores de forma uniforme y NUNCA falle en silencio.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ExternalServiceError = exports.ConflictError = exports.ForbiddenError = exports.UnauthorizedError = exports.NotFoundError = exports.InfrastructureError = exports.BusinessError = exports.ValidationError = exports.AppError = void 0;
+exports.GENERIC_ERROR_MESSAGE = exports.ExternalServiceError = exports.ConflictError = exports.ForbiddenError = exports.UnauthorizedError = exports.NotFoundError = exports.InfrastructureError = exports.BusinessError = exports.ValidationError = exports.AppError = void 0;
 exports.isAppError = isAppError;
 exports.classifyUnknownError = classifyUnknownError;
 exports.toErrorResponse = toErrorResponse;
@@ -102,6 +102,9 @@ function isAppError(err) {
 /**
  * Convierte cualquier `unknown` en un AppError. Lo que no reconozca se trata como
  * fallo de infraestructura inesperado (500), nunca se ignora.
+ *
+ * El `message` del AppError devuelto conserva el texto original SOLO para logging; lo que se
+ * envía al cliente lo decide `toErrorResponse` (que lo reemplaza por "Error interno").
  */
 function classifyUnknownError(err) {
     if (isAppError(err))
@@ -114,17 +117,27 @@ function classifyUnknownError(err) {
         cause: err,
     });
 }
-/** Cuerpo JSON uniforme y seguro para responder al cliente. */
+/** Mensaje genérico que ve el cliente cuando el error no es operacional y es 5xx. */
+exports.GENERIC_ERROR_MESSAGE = "Error interno";
+/**
+ * Cuerpo JSON uniforme y seguro para responder al cliente.
+ *
+ * Desde 0.8.0: un error NO operacional con status >= 500 (excepciones desconocidas, fallos de
+ * infraestructura) responde `error: "Error interno"` en vez de su mensaje: ese texto suele traer
+ * internals (hosts, SQL, URLs con claves). El mensaje real queda en el log (redactado) y el
+ * cliente correlaciona por `requestId`; tampoco se envía `details`. Los operacionales y los 4xx conservan mensaje y details.
+ */
 function toErrorResponse(err, requestId) {
     const appErr = classifyUnknownError(err);
+    const masked = !appErr.isOperational && appErr.httpStatus >= 500;
     return {
         status: appErr.httpStatus,
         body: {
-            error: appErr.message,
+            error: masked ? exports.GENERIC_ERROR_MESSAGE : appErr.message,
             code: appErr.code,
             category: appErr.category,
             ...(requestId ? { requestId } : {}),
-            ...(appErr.details !== undefined ? { details: appErr.details } : {}),
+            ...(!masked && appErr.details !== undefined ? { details: appErr.details } : {}),
         },
     };
 }

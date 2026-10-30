@@ -7,9 +7,9 @@ auth) en cada app del ecosistema superAI. Hay dos perfiles; aplicá el que corre
 
 1. Agregar la dependencia en `package.json`:
    ```json
-   "@ai4u/platform": "github:donchelo/platform"
+   "@ai4u/platform": "github:ai4u-com-co/platform#vX.Y.Z"
    ```
-   (En producción: instalar el tag publicado. Para validar local sin publicar:
+   (Pinea SIEMPRE un tag exacto publicado, `bump-bot` lo actualiza. Para validar local sin publicar:
    `npm install --no-save ../platform`.)
 2. Crear `lib/observability.ts`:
    ```ts

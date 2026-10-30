@@ -1,5 +1,92 @@
 # Changelog — @ai4u/platform
 
+## 0.8.0 — 2026-10-30
+
+Seguridad y robustez (auditoría de 0.7.0). Compatible salvo lo listado en "Cambios visibles".
+
+### Cambios visibles (revisa tus consumidores antes de actualizar)
+- **Cuerpo de un 500 no operacional.** `toErrorResponse` / `withApiHandler` ya no devuelven
+  `err.message` cuando el error NO es operacional y su status es >= 500 (excepciones desconocidas,
+  `InfrastructureError`/`ExternalServiceError`, `AppError` con `isOperational:false`). Responden
+  `{ "error": "Error interno", "code": "UNEXPECTED_ERROR" | <code>, "category", "requestId" }`; el mensaje real
+  (redactado) queda solo en el log. Los 4xx y los `AppError` operacionales conservan su mensaje.
+  Tampoco se envía `details` en ese caso. Antes: `{"error":"connect ECONNREFUSED 10.0.0.5:5432 password authentication failed…"}`.
+  Si una app mostraba `body.error` de un 500 al usuario, ahora verá "Error interno": usa `requestId`
+  para correlacionar con el log.
+- **Nivel de log de errores lanzados.** Un 4xx LANZADO y operacional (`UnauthorizedError`,
+  `ForbiddenError`, `NotFoundError`, `ValidationError`…) se loguea como `warn` (sin stack), igual que un 4xx
+  retornado como `Response`; antes era `error`. **Los 401/403 lanzados pasan de ERROR a WARN**: los paneles y
+  el nightly fixer que filtren por `level=ERROR` para detectar problemas de auth dejarán de verlos y deben pasar
+  a WARN. Un `AppError` con `isOperational:false` (bug inesperado) sigue en `error` con stack aunque sea 4xx;
+  los 5xx siguen en `error`.
+- **`x-request-id` entrante** se acepta solo si cumple `/^[A-Za-z0-9._-]{1,128}$/`; si no, se genera uno
+  nuevo (antes se reflejaba tal cual, hasta 5000+ caracteres).
+- **Logger**: `msg` y los extras (recursivo, profundidad 4) pasan por `redactSecrets` y las claves
+  sensibles se enmascaran también en objetos anidados; `tenant`, `userId` y `requestId` del contexto de la
+  request ya no se pueden pisar con extras (si no hay contexto, el extra sigue valiendo); cada línea lleva
+  `platformVersion`. Los extras tienen tope (100 claves/elementos, profundidad 4), `Buffer`/typed arrays se
+  resumen (`[Buffer n bytes]`), `sanitize` nunca lanza (fallback `{_sanitizeFailed:true}`), y las claves de
+  conteo de tokens (patrón explícito: `max|min|input|output|prompt|completion|total|cached|reasoning` + `tokens`, o
+  `tokens_used|count|in|out|limit|remaining`, también en camelCase) y las palabras `bypass`, `compass`, `passenger`,
+  `passive`, `passthrough`, `passed`, `passing` no se enmascaran; toda otra clave con `token` o `pass`
+  (`secretTokens`, `my_tokens`, `dbpass`, `userpass`, `pass_word`…) sí (fail-closed).
+- **client-errors**: un `service` fuera de `/^[A-Za-z0-9._-]{1,80}$/` se registra como `unknown-client` y un `path`
+  con caracteres no seguros se neutraliza (`_`; sin `/` inicial => `/invalid`); el reporte NO se descarta
+  (los pathnames que el navegador produce, como `/a|b` o `/x[1]`, se conservan). Cuerpo sin `content-length` por encima de `maxBytes` => 413 sin
+  leerlo entero; la clave del rate limit sale de `x-vercel-forwarded-for` / `x-real-ip` antes que de
+  `x-forwarded-for`.
+- `engines.node` pasa a `>=22`. **Es declarativo**: el código de platform corre en Node 20 y no se verifica
+  nada en runtime. Qué revisar antes de actualizar: proyectos con yarn v1 o pnpm con `engine-strict` (la
+  instalación fallará con Node < 22) y proyectos de Vercel que aún estén en Node 20 (deprecado el 1-oct-2026;
+  súbelos a 22).
+
+### Añadido
+- `readIdentity(req, { serviceId?, allowedTenants?, normalizeTenant?, acceptLegacy? })` delega en
+  `readMcSession` de mc-sso 1.3.0 (pin `#v1.3.0`, sin cambio en el árbol). `configureIdentity({...})` fija el
+  default de la app (las opciones por llamada lo pisan; el estado vive en `globalThis` para sobrevivir a
+  bundlers que instancian el módulo varias veces). `Identity.serviceId` expone el servicio de la sesión.
+  **Opt-in**: sin opciones el comportamiento es idéntico al de 0.7.0 (no se deriva nada de `SERVICE_ID`: en
+  varias apps no coincide con el `serviceId` de su handler SSO y cortaría sesiones válidas). Si hay una cookie
+  de sesión y no hay `serviceId` configurado, se emite UN WARN por proceso (medir adopción).
+- `isModuleAllowedStrict(moduleId, allowedModules)` y `requireModule(identity, id, { strict: true })`
+  (`null`/`undefined`/`[]` => ningún módulo); `withApiHandler({ strictModules: true })` lo aplica a
+  `requireModule`. `isModuleAllowed` / `requireModule` sin opción conservan su semántica (null/[] = todo).
+- `platformVersion` (constante `PLATFORM_VERSION` en `src/version.ts`, atada a package.json por test).
+
+### Corregido
+- Logger: `fetch` al ingest con `AbortSignal.timeout(2000)` (un ingest colgado retenía la respuesta de la API
+  hasta el timeout de la función); `flushLogs()` concurrente espera al envío en curso en vez de retornar con
+  el buffer vacío; si el envío falla (red, timeout, 5xx/408/429) el lote se reencola con tope de 1000
+  registros (los más viejos se descartan) y los envíos automáticos esperan 5 s tras un fallo. Tras 3 fallos
+  consecutivos, `flushLogs()` (ruta de request) también espera ese enfriamiento (circuit breaker simple).
+  **Limitación**: si el POST expira pero el ingest SÍ insertó el lote, el reenvío puede **duplicar** registros
+  (no hay idempotencia por registro). Ya no lanza
+  `TypeError` al loguear un objeto con referencias circulares.
+
+### Cómo adoptar el endurecimiento de auth
+1. Averigua el `serviceId` con el que la app crea su handler SSO (`createMcAuthHandler({ serviceId })`);
+   NO asumas que es `SERVICE_ID`.
+2. Una vez, al arrancar la app: `configureIdentity({ serviceId: "<ese id>" })` (o pasa `sessionAuth:
+   { serviceId }` a `withApiHandler`). Apps de un solo tenant: añade `allowedTenants: ["<tenant>"]`
+   (y `normalizeTenant` de `@ai4u/config` si hay alias).
+3. Mide: el WARN "readIdentity sin serviceId configurado" deja de salir y una cookie de otra app/tenant
+   pasa a dar 401. Las sesiones "legacy" (emitidas por mc-sso <= 1.2.0, sin `serviceId`) se aceptan hasta
+   que actives `acceptLegacy: false` (hazlo >= 8 h después de que todas las apps emitan sesiones con
+   `serviceId`, que es lo que duran).
+4. Rutas en apps que no son Mission Control: usa `requireModule(..., { strict: true })` / `strictModules`.
+
+### Decisión pendiente (no cambiada a propósito)
+`allowedModules` ausente o `[]` sigue significando acceso a TODOS los módulos en `isModuleAllowed` /
+`requireModule` por defecto (copia de `access.ts` de Mission Control; puede ser intencional para admins).
+Cambiarlo altera permisos reales: requiere confirmación de Mariano. Mientras tanto el modo estricto es opt-in.
+
+### No incluido
+- `@vercel/oidc` sigue en `^3.8.9`: la 4.0.5 mantiene la API usada (`getVercelOidcToken`) y pasa los tests, pero
+  arrastra `@vercel/cli-config` con `zod` fijado a 4.1.11, así que no cierra los 3 high de `npm audit`.
+- Sin `peerDependencies` de next/react: el código no los importa.
+- devDependencies (vitest 5, etc.) sin tocar: `npm install vitest@5` da ERESOLVE en el monorepo (otros paquetes
+  están en vitest 2/4).
+
 ## 0.7.0 — 2026-10-28
 
 ### Añadido

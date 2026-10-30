@@ -26,6 +26,11 @@ export interface WithApiHandlerOptions {
     label?: string;
     /** Exige sesión + acceso a este módulo (any-of si es array). */
     requireModule?: string | string[];
+    /**
+     * Con `requireModule`: modo estricto, una sesión sin `allowedModules` (null/[]) NO pasa.
+     * Default false (compatibilidad: null/[] = acceso a todo).
+     */
+    strictModules?: boolean;
     /** Exige sesión + este rol (any-of si es array). */
     requireRole?: string | string[];
     /** Exige auth de servicio (x-mc-secret / X-API-Key). */

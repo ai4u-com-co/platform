@@ -1,7 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.configureIdentity = configureIdentity;
 exports.readIdentity = readIdentity;
 exports.isModuleAllowed = isModuleAllowed;
+exports.isModuleAllowedStrict = isModuleAllowedStrict;
 exports.hasRole = hasRole;
 exports.isAdmin = isAdmin;
 exports.requireModule = requireModule;
@@ -19,11 +21,27 @@ exports.verifyServiceRequest = verifyServiceRequest;
  *      esquemas actuales (x-mc-secret compartido / X-API-Key por tenant).
  *
  * La regla de visibilidad de módulos es la misma de mission-control-main/lib/access.ts:
- * sin lista (null/[]) ⇒ ve todo; con lista ⇒ solo esos ids.
+ * sin lista (null/[]) ⇒ ve todo; con lista ⇒ solo esos ids. Existe además el modo estricto
+ * (`requireModule(..., { strict: true })` / `isModuleAllowedStrict`): sin lista ⇒ ninguno.
  */
 const mc_sso_1 = require("@ai4u/mc-sso");
 const errors_1 = require("../errors");
+const logger_1 = require("../logger");
 const security_1 = require("../security");
+const STATE_KEY = Symbol.for("@ai4u/platform/identity");
+function state() {
+    const g = globalThis;
+    return (g[STATE_KEY] ?? (g[STATE_KEY] = { scope: {}, warned: false }));
+}
+/**
+ * Fija el alcance de identidad por defecto de ESTA app (una vez, p. ej. en instrumentation.ts o
+ * en un módulo de config). Las opciones pasadas a `readIdentity`/`withApiHandler({sessionAuth})`
+ * lo pisan campo a campo. No se deriva nada de `SERVICE_ID`: puede no coincidir con el serviceId
+ * de su handler SSO y cortaría sesiones válidas.
+ */
+function configureIdentity(scope) {
+    state().scope = { ...scope };
+}
 /**
  * Parsea el header Cookie. Nunca lanza: una cookie con percent-encoding inválido
  * (p.ej. `%E0%A4%A`, que hace lanzar URIError a decodeURIComponent) se IGNORA y se
@@ -59,7 +77,21 @@ function readIdentity(req, cfg = {}) {
     const token = parseCookies(req.headers.get("cookie"))[cookieName];
     if (!token)
         return null;
-    const data = (0, mc_sso_1.verifySession)(token, secret);
+    const appScope = state().scope;
+    const scope = {
+        serviceId: cfg.serviceId ?? appScope.serviceId,
+        allowedTenants: cfg.allowedTenants ?? appScope.allowedTenants,
+        normalizeTenant: cfg.normalizeTenant ?? appScope.normalizeTenant,
+        acceptLegacy: cfg.acceptLegacy ?? appScope.acceptLegacy,
+    };
+    if (scope.serviceId === undefined && !state().warned) {
+        state().warned = true;
+        (0, logger_1.getLogger)("platform/auth").warn("readIdentity sin serviceId configurado: una sesión firmada para otra app con el mismo secreto sería aceptada. " +
+            "Pasa { serviceId } a readIdentity/sessionAuth o llama configureIdentity({ serviceId }) (platform 0.8.0).");
+    }
+    // Se reenvía solo el token ya parseado (parseCookies ignora duplicados mal codificados) y mc-sso
+    // aplica firma, expiración y las restricciones de app/tenant.
+    const data = (0, mc_sso_1.readMcSession)(`${cookieName}=${encodeURIComponent(token)}`, secret, { cookieName, ...scope });
     if (!data)
         return null;
     return {
@@ -68,6 +100,7 @@ function readIdentity(req, cfg = {}) {
         roles: data.roles,
         allowedModules: data.allowedModules ?? null,
         displayName: data.displayName,
+        serviceId: data.serviceId,
     };
 }
 /* ── Permisos (misma regla que access.ts) ────────────────────────────────── */
@@ -75,6 +108,13 @@ function isModuleAllowed(moduleId, allowedModules) {
     if (!allowedModules || allowedModules.length === 0)
         return true;
     return allowedModules.includes(moduleId);
+}
+/**
+ * Variante ESTRICTA: sin lista (null/undefined/[]) => NINGÚN módulo. Úsala en apps que no son
+ * Mission Control, donde una sesión sin `allowedModules` no debería ver todo.
+ */
+function isModuleAllowedStrict(moduleId, allowedModules) {
+    return Array.isArray(allowedModules) && allowedModules.includes(moduleId);
 }
 function hasRole(identity, role) {
     return !!identity?.roles?.includes(role);
@@ -86,11 +126,12 @@ function isAdmin(identity) {
  * Exige identidad y acceso a un módulo (acepta varios: any-of). Lanza errores
  * tipados que el wrapper HTTP convierte en 401/403 uniformes.
  */
-function requireModule(identity, moduleId) {
+function requireModule(identity, moduleId, opts = {}) {
     if (!identity)
         throw new errors_1.UnauthorizedError();
     const ids = Array.isArray(moduleId) ? moduleId : [moduleId];
-    if (!ids.some((id) => isModuleAllowed(id, identity.allowedModules))) {
+    const allowed = opts.strict ? isModuleAllowedStrict : isModuleAllowed;
+    if (!ids.some((id) => allowed(id, identity.allowedModules))) {
         throw new errors_1.ForbiddenError("No autorizado para este módulo");
     }
     return identity;

@@ -10,10 +10,12 @@
  *      esquemas actuales (x-mc-secret compartido / X-API-Key por tenant).
  *
  * La regla de visibilidad de módulos es la misma de mission-control-main/lib/access.ts:
- * sin lista (null/[]) ⇒ ve todo; con lista ⇒ solo esos ids.
+ * sin lista (null/[]) ⇒ ve todo; con lista ⇒ solo esos ids. Existe además el modo estricto
+ * (`requireModule(..., { strict: true })` / `isModuleAllowedStrict`): sin lista ⇒ ninguno.
  */
-import { verifySession } from "@ai4u/mc-sso"
+import { readMcSession } from "@ai4u/mc-sso"
 import { ForbiddenError, UnauthorizedError } from "../errors"
+import { getLogger } from "../logger"
 import { safeEqual } from "../security"
 
 export interface Identity {
@@ -22,23 +24,58 @@ export interface Identity {
   roles?: string[]
   allowedModules?: string[] | null
   displayName?: string
+  /** App para la que se emitió la sesión (mc-sso >= 1.3.0). undefined = sesión "legacy". */
+  serviceId?: string
 }
 
-/** Forma extendida de la sesión (mc-sso lleva estos campos opcionales tras el handoff). */
-interface ExtendedSession {
-  tenantId: string
-  userId?: string
-  roles?: string[]
-  allowedModules?: string[] | null
-  displayName?: string
+/**
+ * Restricciones de app/tenant sobre la sesión (se pasan tal cual a `readMcSession` de mc-sso).
+ * El secreto de firma se comparte entre apps: sin estas opciones una cookie de otra app/tenant
+ * con firma válida PASA. Son opt-in; ver "Cómo adoptar el endurecimiento de auth" en CHANGELOG.
+ */
+export interface IdentityScope {
+  /** `serviceId` de ESTA app (el mismo de su `createMcAuthHandler`). Sesión de otro servicio => null. */
+  serviceId?: string
+  /** Tenants aceptados (apps de un solo tenant). Fuera de la lista => null; `[]` rechaza todo. */
+  allowedTenants?: readonly string[]
+  /** Normalizador de tenant para comparar `allowedTenants` (p. ej. `normalizeTenant` de @ai4u/config). */
+  normalizeTenant?: (tenantId: string) => string
+  /** Aceptar sesiones sin `serviceId` (emitidas por mc-sso <= 1.2.0). Default de mc-sso: true. */
+  acceptLegacy?: boolean
 }
 
-export interface SessionAuthConfig {
+export interface SessionAuthConfig extends IdentityScope {
   /** Nombre de la cookie de sesión (default "mc_session"). */
   cookieName?: string
   /** Secreto de firma (default process.env.MISSION_CONTROL_SECRET). */
   secret?: string
 }
+
+/**
+ * Estado compartido por proceso en globalThis: los bundlers (Turbopack) pueden instanciar este módulo
+ * varias veces (una copia por bundle) y una variable de módulo haría que configureIdentity() en una
+ * copia no lo viera otra, ni el WARN "una vez". (process.env no sirve: normalizeTenant es una función.)
+ */
+interface IdentityState {
+  scope: IdentityScope
+  warned: boolean
+}
+const STATE_KEY = Symbol.for("@ai4u/platform/identity")
+function state(): IdentityState {
+  const g = globalThis as unknown as Record<symbol, IdentityState | undefined>
+  return (g[STATE_KEY] ??= { scope: {}, warned: false })
+}
+
+/**
+ * Fija el alcance de identidad por defecto de ESTA app (una vez, p. ej. en instrumentation.ts o
+ * en un módulo de config). Las opciones pasadas a `readIdentity`/`withApiHandler({sessionAuth})`
+ * lo pisan campo a campo. No se deriva nada de `SERVICE_ID`: puede no coincidir con el serviceId
+ * de su handler SSO y cortaría sesiones válidas.
+ */
+export function configureIdentity(scope: IdentityScope): void {
+  state().scope = { ...scope }
+}
+
 
 type HeaderCarrier = { headers: { get(name: string): string | null } }
 
@@ -73,7 +110,23 @@ export function readIdentity(req: HeaderCarrier, cfg: SessionAuthConfig = {}): I
   if (!secret) return null
   const token = parseCookies(req.headers.get("cookie"))[cookieName]
   if (!token) return null
-  const data = verifySession(token, secret) as ExtendedSession | null
+  const appScope = state().scope
+  const scope: IdentityScope = {
+    serviceId: cfg.serviceId ?? appScope.serviceId,
+    allowedTenants: cfg.allowedTenants ?? appScope.allowedTenants,
+    normalizeTenant: cfg.normalizeTenant ?? appScope.normalizeTenant,
+    acceptLegacy: cfg.acceptLegacy ?? appScope.acceptLegacy,
+  }
+  if (scope.serviceId === undefined && !state().warned) {
+    state().warned = true
+    getLogger("platform/auth").warn(
+      "readIdentity sin serviceId configurado: una sesión firmada para otra app con el mismo secreto sería aceptada. " +
+        "Pasa { serviceId } a readIdentity/sessionAuth o llama configureIdentity({ serviceId }) (platform 0.8.0).",
+    )
+  }
+  // Se reenvía solo el token ya parseado (parseCookies ignora duplicados mal codificados) y mc-sso
+  // aplica firma, expiración y las restricciones de app/tenant.
+  const data = readMcSession(`${cookieName}=${encodeURIComponent(token)}`, secret, { cookieName, ...scope })
   if (!data) return null
   return {
     tenantId: data.tenantId,
@@ -81,6 +134,7 @@ export function readIdentity(req: HeaderCarrier, cfg: SessionAuthConfig = {}): I
     roles: data.roles,
     allowedModules: data.allowedModules ?? null,
     displayName: data.displayName,
+    serviceId: data.serviceId,
   }
 }
 
@@ -89,6 +143,14 @@ export function readIdentity(req: HeaderCarrier, cfg: SessionAuthConfig = {}): I
 export function isModuleAllowed(moduleId: string, allowedModules: string[] | null | undefined): boolean {
   if (!allowedModules || allowedModules.length === 0) return true
   return allowedModules.includes(moduleId)
+}
+
+/**
+ * Variante ESTRICTA: sin lista (null/undefined/[]) => NINGÚN módulo. Úsala en apps que no son
+ * Mission Control, donde una sesión sin `allowedModules` no debería ver todo.
+ */
+export function isModuleAllowedStrict(moduleId: string, allowedModules: string[] | null | undefined): boolean {
+  return Array.isArray(allowedModules) && allowedModules.includes(moduleId)
 }
 
 export function hasRole(identity: Identity | null, role: string): boolean {
@@ -103,10 +165,15 @@ export function isAdmin(identity: Identity | null): boolean {
  * Exige identidad y acceso a un módulo (acepta varios: any-of). Lanza errores
  * tipados que el wrapper HTTP convierte en 401/403 uniformes.
  */
-export function requireModule(identity: Identity | null, moduleId: string | string[]): Identity {
+export function requireModule(
+  identity: Identity | null,
+  moduleId: string | string[],
+  opts: { strict?: boolean } = {},
+): Identity {
   if (!identity) throw new UnauthorizedError()
   const ids = Array.isArray(moduleId) ? moduleId : [moduleId]
-  if (!ids.some((id) => isModuleAllowed(id, identity.allowedModules))) {
+  const allowed = opts.strict ? isModuleAllowedStrict : isModuleAllowed
+  if (!ids.some((id) => allowed(id, identity.allowedModules))) {
     throw new ForbiddenError("No autorizado para este módulo")
   }
   return identity

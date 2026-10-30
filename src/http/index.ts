@@ -71,6 +71,11 @@ export interface WithApiHandlerOptions {
   label?: string
   /** Exige sesión + acceso a este módulo (any-of si es array). */
   requireModule?: string | string[]
+  /**
+   * Con `requireModule`: modo estricto, una sesión sin `allowedModules` (null/[]) NO pasa.
+   * Default false (compatibilidad: null/[] = acceso a todo).
+   */
+  strictModules?: boolean
   /** Exige sesión + este rol (any-of si es array). */
   requireRole?: string | string[]
   /** Exige auth de servicio (x-mc-secret / X-API-Key). */
@@ -90,13 +95,19 @@ function jsonResponse(body: unknown, status: number, requestId: string): Respons
   })
 }
 
+/** x-request-id entrante: solo charset/longitud acotados; si no, se regenera (evita inflado e inyección en logs). */
+const REQUEST_ID_RE = /^[A-Za-z0-9._-]{1,128}$/
+function safeIncomingRequestId(v: string | null): string | null {
+  return v !== null && REQUEST_ID_RE.test(v) ? v : null
+}
+
 export function withApiHandler<R extends object = object>(
   handler: RouteHandler<R>,
   options: WithApiHandlerOptions = {},
 ): (req: Request, routeCtx?: R) => Promise<Response> {
   const label = options.label ?? "api"
   return async (req: Request, routeCtx?: R): Promise<Response> => {
-    const requestId = req.headers.get("x-request-id") ?? newRequestId()
+    const requestId = safeIncomingRequestId(req.headers.get("x-request-id")) ?? newRequestId()
     const log = getLogger(label)
 
     return runWithContext({ requestId }, async () => {
@@ -122,7 +133,7 @@ export function withApiHandler<R extends object = object>(
           if (options.requireModule || options.requireRole) {
             identity = readIdentity(req, options.sessionAuth)
             if (identity) setContextFields({ tenant: identity.tenantId, userId: identity.userId })
-            if (options.requireModule) requireModule(identity, options.requireModule)
+            if (options.requireModule) requireModule(identity, options.requireModule, { strict: options.strictModules })
             if (options.requireRole) requireRole(identity, options.requireRole)
           } else {
             // Lee identidad si está disponible, pero no la exige.
@@ -157,8 +168,18 @@ export function withApiHandler<R extends object = object>(
         } catch (err) {
           const durationMs = Date.now() - start
           const appErr = classifyUnknownError(err)
-          // Log con detalle completo (stack incluido); la respuesta al cliente es segura.
-          log.error({ durationMs, status: appErr.httpStatus, code: appErr.code, err: appErr.cause ?? appErr }, `${label} error`)
+          // 4xx lanzado y operacional (Unauthorized/NotFound/Validation…) es tráfico normal: WARN sin stack,
+          // igual que un 4xx retornado como Response. Va a ERROR el 5xx y todo AppError marcado
+          // isOperational:false (bug inesperado, ver errors/index.ts): lo que consumen paneles y el fixer.
+          if (appErr.httpStatus < 500 && appErr.isOperational) {
+            log.warn(
+              { durationMs, status: appErr.httpStatus, code: appErr.code },
+              `${label} ${appErr.name}: ${appErr.message}`,
+            )
+          } else {
+            // Log con detalle completo (stack incluido); la respuesta al cliente es segura.
+            log.error({ durationMs, status: appErr.httpStatus, code: appErr.code, err: appErr.cause ?? appErr }, `${label} error`)
+          }
           const { status, body } = toErrorResponse(appErr, requestId)
           return jsonResponse(body, status, requestId)
         }

@@ -8,7 +8,7 @@
  * ⚠ Es un endpoint SIN AUTENTICACIÓN (el navegador del visitante no tiene credenciales de servicio).
  *   Riesgo: cualquiera puede intentar llenar platform_logs de basura. Mitigaciones incluidas:
  *   solo application/json, tope de tamaño (413), mismo origen (Origin/Sec-Fetch-Site, 403), límite
- *   por IP en memoria (429), validación estricta de forma y truncado de campos, y respuesta 204 sin
+ *   por IP en memoria (429; clave desde x-vercel-forwarded-for/x-real-ip antes que x-forwarded-for, Map con tope), validación estricta de forma y truncado de campos, y respuesta 204 sin
  *   eco. El límite por IP es de MEJOR ESFUERZO: en serverless cada instancia tiene su propio Map
  *   y se reinicia en cold start; no sustituye a un WAF/rate-limit de plataforma. El origen se
  *   comprueba por cabeceras que un cliente no-navegador puede falsificar: sirve contra abuso
@@ -31,6 +31,13 @@ const MAX_MESSAGE = 2000
 const MAX_STACK = 4000
 const WINDOW_MS = 60_000
 const KINDS = ["error", "unhandledrejection", "manual"] as const
+/** Tope de entradas del Map del rate limit: al llenarse se podan expirados y luego las más viejas. */
+const MAX_HITS = 5000
+/** `service`: id de app corto (sin espacios ni saltos de línea). */
+const SERVICE_RE = /^[A-Za-z0-9._-]{1,80}$/
+/** Caracteres de un pathname que el navegador produce tal cual (incluye `|`, `[`, `]`, `^`, `{`, `}`). */
+const PATH_UNSAFE_RE = /[^A-Za-z0-9._~%!$&'()*+,;=:@/|[\]^{}-]/g
+const UNKNOWN_SERVICE = "unknown-client"
 const SENSITIVE_KEY = /pass(word)?|secret|token|api[-_]?key|authorization|cookie|credential/i
 
 interface ValidPayload {
@@ -60,15 +67,21 @@ function validate(raw: unknown): ValidPayload | null {
   if (!KINDS.includes(o.kind as (typeof KINDS)[number])) return null
   if (o.extra !== undefined && (typeof o.extra !== "object" || o.extra === null || Array.isArray(o.extra))) return null
 
+  // Solo pathname: descarta querystring/hash aunque el cliente los mande.
+  // Un path raro NO descarta el reporte: se neutralizan los caracteres peligrosos (o "/invalid").
+  const rawPath = clean(o.path.split(/[?#]/)[0], 200)
+  const path = rawPath.startsWith("/") ? rawPath.replace(PATH_UNSAFE_RE, "_") : "/invalid"
   const out: ValidPayload = {
     message: clean(o.message, MAX_MESSAGE),
     kind: o.kind as ValidPayload["kind"],
-    // Solo pathname: descarta querystring/hash aunque el cliente los mande.
-    path: clean(o.path.split(/[?#]/)[0], 200),
+    path,
   }
   if (typeof o.stack === "string") out.stack = clean(o.stack, MAX_STACK)
   if (typeof o.name === "string") out.name = clean(o.name, 100)
-  if (typeof o.service === "string") out.service = clean(o.service, 80)
+  if (typeof o.service === "string") {
+    // Un service con formato raro tampoco descarta el reporte: se reemplaza por un valor por defecto.
+    out.service = SERVICE_RE.test(o.service) ? o.service : UNKNOWN_SERVICE
+  }
   if (o.extra) {
     const extra: Record<string, string | number | boolean> = {}
     for (const [k, v] of Object.entries(o.extra as Record<string, unknown>).slice(0, 10)) {
@@ -100,10 +113,43 @@ function sameOrigin(req: Request): boolean {
   return site === "same-origin"
 }
 
+/**
+ * IP para el rate limit. Se prefieren las cabeceras que pone la plataforma (Vercel reescribe
+ * `x-vercel-forwarded-for` / `x-real-ip` y el cliente no las controla) sobre `x-forwarded-for`,
+ * cuyo primer valor puede venir falsificado por el cliente.
+ */
 function clientIp(req: Request): string {
+  const trusted = req.headers.get("x-vercel-forwarded-for") ?? req.headers.get("x-real-ip")
+  const first = trusted?.split(",")[0].trim()
+  if (first) return first
   const xff = req.headers.get("x-forwarded-for")
   if (xff) return xff.split(",")[0].trim() || "unknown"
-  return req.headers.get("x-real-ip") ?? "unknown"
+  return "unknown"
+}
+
+/** Lee el cuerpo como stream y corta apenas supera `maxBytes` (null = excedido). Nunca carga todo en memoria. */
+async function readBodyCapped(req: Request, maxBytes: number): Promise<string | null> {
+  if (!req.body) return ""
+  const reader = req.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined)
+      return null
+    }
+    chunks.push(value)
+  }
+  const all = new Uint8Array(total)
+  let off = 0
+  for (const c of chunks) {
+    all.set(c, off)
+    off += c.byteLength
+  }
+  return new TextDecoder().decode(all)
 }
 
 const empty = (status: number) => new Response(null, { status })
@@ -115,7 +161,14 @@ export function createClientErrorHandler(options: ClientErrorHandlerOptions = {}
 
   function limited(ip: string): boolean {
     const now = Date.now()
-    if (hits.size > 1000) for (const [k, v] of hits) if (v.reset <= now) hits.delete(k)
+    if (hits.size >= MAX_HITS) {
+      for (const [k, v] of hits) if (v.reset <= now) hits.delete(k)
+      // Aún lleno (muchas IPs en 1 min): se descartan las más viejas (Map conserva el orden de inserción).
+      for (const k of hits.keys()) {
+        if (hits.size < MAX_HITS) break
+        hits.delete(k)
+      }
+    }
     const h = hits.get(ip)
     if (!h || h.reset <= now) {
       hits.set(ip, { count: 1, reset: now + WINDOW_MS })
@@ -134,13 +187,13 @@ export function createClientErrorHandler(options: ClientErrorHandlerOptions = {}
 
     const declared = Number(req.headers.get("content-length"))
     if (Number.isFinite(declared) && declared > maxBytes) return empty(413)
-    let text: string
+    let text: string | null
     try {
-      text = await req.text()
+      text = await readBodyCapped(req, maxBytes)
     } catch {
       return empty(400)
     }
-    if (new TextEncoder().encode(text).length > maxBytes) return empty(413)
+    if (text === null) return empty(413)
 
     let payload: ValidPayload | null
     try {
